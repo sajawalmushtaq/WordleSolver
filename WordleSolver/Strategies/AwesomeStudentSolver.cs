@@ -52,52 +52,110 @@ public sealed class AwesomeStudentSolver : IWordleSolverStrategy
     /// <returns>A five-letter lowercase word.</returns>
     public string PickNextGuess(GuessResult previousResult)
     {
-        // Analyze previousResult and remove any words from
-        // _remainingWords that aren't possible
-
         if (!previousResult.IsValid)
             throw new InvalidOperationException("PickNextGuess shouldn't be called if previous result isn't valid");
 
-        // Check if first guess
         if (previousResult.Guesses.Count == 0)
         {
-            // TODO: Pick the best starting word from wordle.txt 
-            // BE CAREFUL that the first word you pick is in that wordle.txt list or your
-            // program won't work. Regular Wordle allows users to guess any five-letter
-            // word from a much larger dictionary, but we restrict it to the words that
-            // can actually be chosen by WordleService to make it easier on you.
-            string firstWord = "canoe"; 
-
-            // Filter _remainingWords to remove any words that don't match the first word
-            
+            string firstWord = "canoe";
             _remainingWords.Remove(firstWord);
-
-            return firstWord;  
+            return firstWord;
         }
-        else
+
+        string lastGuess = previousResult.Word;
+        LetterStatus[] statuses = previousResult.LetterStatuses;
+
+        var requiredLetters = new Dictionary<char, int>();
+        var misplacedLetters = new List<(char letter, int index)>();
+        var correctLetters = new Dictionary<int, char>();
+        var forbiddenPositions = new Dictionary<char, HashSet<int>>();
+        var globallyBannedLetters = new HashSet<char>();
+
+        // Analyze the last result
+        for (int i = 0; i < 5; i++)
         {
-            // TODO: Analyze the previousResult and reduce/filter _remainingWords based on the feedback
-            for (int i = 0; i < 5; i++)
+            char c = lastGuess[i];
+            var status = statuses[i];
+
+            switch (status)
             {
-                if (previousResult.LetterStatuses[i] == LetterStatus.Unused)
-                {
-                    foreach (string word in _remainingWords)
+                case LetterStatus.Unused:
+                    // Check if this letter was marked as used elsewhere (misplaced/correct)
+                    bool usedElsewhere = false;
+                    for (int j = 0; j < 5; j++)
                     {
-                        if (word.Contains(previousResult.Word[i]))
+                        if (j != i && lastGuess[j] == c && statuses[j] != LetterStatus.Unused)
                         {
-                            _remainingWords.Remove(word);
+                            usedElsewhere = true;
+                            break;
                         }
                     }
-                }
+
+                    if (usedElsewhere)
+                    {
+                        if (!forbiddenPositions.ContainsKey(c))
+                            forbiddenPositions[c] = new();
+                        forbiddenPositions[c].Add(i);
+                    }
+                    else
+                    {
+                        globallyBannedLetters.Add(c);
+                    }
+                    break;
+
+                case LetterStatus.Misplaced:
+                    misplacedLetters.Add((c, i));
+                    if (!requiredLetters.ContainsKey(c))
+                        requiredLetters[c] = 0;
+                    requiredLetters[c]++;
+                    if (!forbiddenPositions.ContainsKey(c))
+                        forbiddenPositions[c] = new();
+                    forbiddenPositions[c].Add(i);
+                    break;
+
+                case LetterStatus.Correct:
+                    correctLetters[i] = c;
+                    if (!requiredLetters.ContainsKey(c))
+                        requiredLetters[c] = 0;
+                    requiredLetters[c]++;
+                    break;
             }
         }
 
-        // Utilize the remaining words to choose the next guess
+        // Apply filters
+        _remainingWords = _remainingWords
+            .Where(word =>
+            {
+                // Filter out words with globally banned letters
+                if (globallyBannedLetters.Any(b => word.Contains(b)))
+                    return false;
+
+                // Correct letters at positions
+                foreach (var (index, ch) in correctLetters)
+                    if (word[index] != ch) return false;
+
+                // Misplaced: must have the letter, but not at that index
+                foreach (var (ch, idx) in misplacedLetters)
+                    if (word[idx] == ch || !word.Contains(ch)) return false;
+
+                // Forbidden positions
+                foreach (var (ch, positions) in forbiddenPositions)
+                    foreach (var pos in positions)
+                        if (word[pos] == ch) return false;
+
+                // Required letters (min frequency check)
+                foreach (var (ch, minCount) in requiredLetters)
+                    if (word.Count(c => c == ch) < minCount) return false;
+
+                return true;
+            })
+            .ToList();
+
         string choice = ChooseBestRemainingWord(previousResult);
         _remainingWords.Remove(choice);
-
         return choice;
     }
+
 
     /// <summary>
     /// Pick the best of the remaining words according to some heuristic.
